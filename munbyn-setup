@@ -1,0 +1,140 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: 2026 Rob Tagg <rob@tagg.co.uk>
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# munbyn-setup - configure a CUPS queue for the Munbyn ITPP130/ITPP130B
+set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+QUEUE=ITPP130
+URI=
+PAPER=w288h432
+DRY_RUN=0
+VALIDATE=0
+BT_MAC=
+QUEUE_SET=0
+# Transport-dependent; set once the URI is known.
+CONNECTION=USB
+ERROR_POLICY=stop-printer
+usage() {
+  cat <<'HELP'
+Usage: sudo munbyn-setup [--queue NAME] [--uri URI] [--bluetooth MAC]
+                         [--paper 4x6|100x150] [--dry-run]
+Configure a local Munbyn ITPP130/ITPP130B over USB or Bluetooth, sharing disabled.
+Defaults: ITPP130 queue, 4 x 6 inches, automatic USB discovery.
+--uri selects a printer when more than one is connected (usb:// or bluetooth://).
+--bluetooth sets up the printer over Bluetooth SPP using its MAC address, which
+  may be written with or without colons. Pair and trust the printer first:
+    bluetoothctl --timeout 20 scan on
+    bluetoothctl pair AA:BB:CC:DD:EE:FF && bluetoothctl trust AA:BB:CC:DD:EE:FF
+  Use the Classic address, NOT the one whose name ends in -LE: the -LE endpoint
+  is Bluetooth Low Energy and serves the vendor phone app, not CUPS.
+  Bluetooth queues default to the name ITPP130BT and retry jobs on error, since
+  a radio link drops more readily than a cable. Needs the bluez-cups package.
+  Bluetooth printers cannot be discovered automatically, so the MAC is required.
+--dry-run discovers and displays changes without applying them (CUPS must be running).
+No labels are printed and the global default printer is not changed.
+HELP
+}
+die() { echo "Error: $*" >&2; exit 1; }
+while (( $# )); do
+  case $1 in
+    --help|-h) usage; exit 0 ;;
+    --queue|--uri|--paper|--bluetooth)
+      (( $# >= 2 )) || die "Missing value for $1"
+      case $1 in
+        --queue) QUEUE=$2; QUEUE_SET=1 ;;
+        --uri) URI=$2 ;;
+        --bluetooth) BT_MAC=$2 ;;
+        --paper) case $2 in 4x6) PAPER=w288h432 ;; 100x150) PAPER=w283h425 ;; *) die 'Paper must be 4x6 or 100x150.' ;; esac ;;
+      esac
+      shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    --validate-only) VALIDATE=1; shift ;;
+    *) die "Unknown option: $1" ;;
+  esac
+done
+if [[ -n $BT_MAC ]]; then
+  [[ -z $URI ]] || die 'Pass either --bluetooth or --uri, not both.'
+  # Accept AA:BB:CC:DD:EE:FF, AA-BB-..., or bare hex; CUPS wants 12 bare hex digits.
+  BT_MAC=${BT_MAC//:/}
+  BT_MAC=${BT_MAC//-/}
+  BT_MAC=${BT_MAC^^}
+  [[ $BT_MAC =~ ^[0-9A-F]{12}$ ]] || die 'A Bluetooth MAC needs 12 hex digits, e.g. AA:BB:CC:DD:EE:FF.'
+  URI=bluetooth://$BT_MAC
+  (( QUEUE_SET )) || QUEUE=ITPP130BT
+fi
+[[ $QUEUE =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]] || die 'Use a queue name of 1–64 letters, digits, underscores or hyphens.'
+if [[ -n $URI ]]; then
+  [[ $URI != *[$'\n\r\t ']* ]] || die 'A URI must not contain whitespace.'
+  case $URI in
+    usb://*) CONNECTION=USB ;;
+    bluetooth://*)
+      CONNECTION=Bluetooth
+      ERROR_POLICY=retry-job
+      [[ -z $BT_MAC ]] && BT_MAC=${URI#bluetooth://}
+      [[ $BT_MAC =~ ^[0-9A-Fa-f]{12}$ ]] || die 'A bluetooth:// URI must carry 12 hex digits, e.g. bluetooth://AABBCCDDEEFF.'
+      ;;
+    *) die 'Only a usb:// or bluetooth:// URI is supported.' ;;
+  esac
+fi
+(( VALIDATE )) && exit 0
+if (( ! DRY_RUN )); then
+  (( EUID == 0 )) || die 'Run with sudo to configure the system printer.'
+  [[ -f /usr/share/cups/model/munbyn/ITPP130-Label-printer.ppd ]] || die 'Install the driver RPM first.'
+  systemctl enable --now cups.service
+fi
+if [[ $CONNECTION == Bluetooth ]]; then
+  # The queue is useless without the backend that opens the RFCOMM socket.
+  [[ -x /usr/lib/cups/backend/bluetooth ]] ||
+    die 'Bluetooth needs the CUPS backend. Install it with: dnf install bluez-cups'
+  # The queue is equally useless if bluetoothd is not running after a reboot.
+  (( DRY_RUN )) || systemctl enable --now bluetooth.service
+  # The backend needs an existing bond (pairing) to open the RFCOMM socket, and
+  # it cannot answer any prompt from inside a print job. timeout guards against
+  # bluetoothctl blocking on "Waiting to connect to bluetoothd...".
+  if command -v bluetoothctl >/dev/null; then
+    PRETTY=$(sed 's/../&:/g; s/:$//' <<< "$BT_MAC")
+    INFO=$(timeout 10 bluetoothctl info "$PRETTY" 2>/dev/null || true)
+    if [[ -z $INFO || $INFO == *'not available'* ]]; then
+      die "Bluetooth device $PRETTY is unknown. Pair it first:
+  bluetoothctl --timeout 20 scan on
+  bluetoothctl pair $PRETTY && bluetoothctl trust $PRETTY"
+    fi
+    [[ $INFO == *'Paired: yes'* ]] || die "Bluetooth device $PRETTY is not paired. Run: bluetoothctl pair $PRETTY"
+    [[ $INFO == *'Trusted: yes'* ]] || die "Bluetooth device $PRETTY is not trusted. Run: bluetoothctl trust $PRETTY"
+    grep -q '00001101-0000-1000-8000-00805f9b34fb' <<< "$INFO" ||
+      echo "Warning: $PRETTY does not advertise Bluetooth Serial Port. If printing fails, check you used the Classic address rather than the -LE one." >&2
+  fi
+fi
+if [[ -z $URI ]]; then
+  # Only USB can be discovered: the bluez backend lists HCRP printers, and this
+  # printer offers Serial Port instead, so Bluetooth always needs --bluetooth.
+  DEVICES=$(lpinfo -v) || die 'CUPS discovery failed. Power on/connect the printer and start cups.service.'
+  MATCHES=()
+  while IFS= read -r line; do
+    case "$line" in
+      direct\ usb://*/ITPP130\?*|direct\ usb://*/ITPP130|direct\ usb://*/ITPP130B\?*|direct\ usb://*/ITPP130B)
+        MATCHES+=("${line#direct }") ;;
+    esac
+  done <<< "$DEVICES"
+  if (( ${#MATCHES[@]} != 1 )); then
+    printf 'Found %s matching USB printers. Connect one, or pass --uri using a URI from sudo lpinfo -v.\n' "${#MATCHES[@]}" >&2
+    if (( ${#MATCHES[@]} )); then printf '%s\n' "${MATCHES[@]}" >&2; fi
+    exit 1
+  fi
+  URI=${MATCHES[0]}
+fi
+EXISTING=$(LC_ALL=C lpstat -v "$QUEUE" 2>/dev/null || true)
+if [[ -n $EXISTING ]]; then
+  EXISTING=${EXISTING#*: }
+  [[ $EXISTING == "$URI" ]] || die "Queue $QUEUE already points to another device. Choose a different --queue name."
+fi
+COMMAND=(lpadmin -p "$QUEUE" -E -v "$URI"
+  -P /usr/share/cups/model/munbyn/ITPP130-Label-printer.ppd
+  -D 'Munbyn ITPP130B Label Printer' -L "$CONNECTION"
+  -o "PageSize=$PAPER" -o "PageRegion=$PAPER"
+  -o printer-is-shared=false -o "printer-error-policy=$ERROR_POLICY")
+if (( DRY_RUN )); then printf 'Would run: '; printf '%q ' "${COMMAND[@]}"; printf '\n'; exit 0; fi
+"${COMMAND[@]}"
+lpstat -p "$QUEUE" -v "$QUEUE"
+printf '\nReady. Print a label with: lp -d %q label.pdf\n' "$QUEUE"

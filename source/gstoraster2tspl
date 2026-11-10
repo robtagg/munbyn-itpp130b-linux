@@ -1,0 +1,96 @@
+#!/bin/bash
+#
+# SPDX-FileCopyrightText: 2026 DaaarQ <DaaarQ@users.noreply.github.com>
+# SPDX-FileCopyrightText: 2026 Rob Tagg <rob@tagg.co.uk>
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Modified in 2026 by Rob Tagg <rob@tagg.co.uk>, from the upstream version at
+# commit ecdace15 of https://github.com/DaaarQ/itpp130-linux-driver:
+#   - corrected the number of shell arguments passed along the filter chain
+#   - use absolute paths to the CUPS filters
+#   - substitute the PPD's default page size when a job requests a size that
+#     pdftopdf would otherwise render as A4 (see README, "If nothing prints")
+#
+# gstoraster2tspl - CUPS filter wrapper for the Munbyn ITPP130 label printer:
+#
+#   PDF (job input)
+#     -> pdftopdf          (page size / custom size, copies, orientation)
+#     -> gstoraster        (PDF -> CUPS raster; ghostscript renders page
+#                           rotation correctly, like the vendor macOS driver)
+#     -> rastertolabel-itpp130 (CUPS raster -> TSPL)
+#
+# Registered in the PPD as:
+#   *cupsFilter: "application/pdf 0 gstoraster2tspl"
+#
+# Each stage after pdftopdf receives only 5 arguments so that it reads the
+# piped output from stdin instead of the original input file.
+#
+# pipefail makes the pipeline return a non-zero status when any stage fails,
+# so CUPS marks the job failed if pdftopdf or gstoraster breaks instead of
+# reporting false success.
+
+set -u -o pipefail
+
+if [ "$#" -ne 5 ] && [ "$#" -ne 6 ]; then
+  echo "ERROR: gstoraster2tspl job-id user title copies options [file]" >&2
+  exit 1
+fi
+
+# pdftopdf fixes the page geometry for the whole chain, but it acts only on a
+# PageSize that names one of the PPD's own sizes.  Given no PageSize at all
+# (a plain "lp file.pdf", which leaves the page size to *DefaultPageSize) or a
+# Custom.WIDTHxHEIGHT value (what print dialogues send once they subtract their
+# own margins), it quietly falls back to A4 instead.  A4 at 203 dpi is
+# 1678 x 2374 dots against an 832-dot head, so rastertolabel-itpp130 rejects
+# the raster and the job dies with "No pages were found".  Substitute the PPD
+# default whenever the requested size is not one pdftopdf will honour, and
+# leave a usable request completely untouched.
+OPTIONS=$5
+REQUESTED=
+for token in $OPTIONS; do
+  case $token in
+    PageSize=*) REQUESTED=${token#PageSize=} ;;
+  esac
+done
+
+USABLE=0
+case $REQUESTED in
+  '') ;;
+  *[!A-Za-z0-9]*) ;;  # Custom.WxH and anything else pdftopdf would drop to A4
+  *)
+    if [ -n "${PPD:-}" ] && [ -r "${PPD:-}" ]; then
+      # Honour the request only if the PPD really offers that size.
+      grep -q "^\*PageSize ${REQUESTED}[/:]" "$PPD" && USABLE=1
+    else
+      USABLE=1  # no PPD to check against, so do not second-guess the request
+    fi
+    ;;
+esac
+
+if [ "$USABLE" -eq 0 ]; then
+  DEFAULT_SIZE=
+  if [ -n "${PPD:-}" ] && [ -r "${PPD:-}" ]; then
+    DEFAULT_SIZE=$(sed -n 's/^\*DefaultPageSize:[[:space:]]*\([^[:space:]]*\).*/\1/p' \
+                   "$PPD" | head -n 1)
+  fi
+  [ -n "$DEFAULT_SIZE" ] || DEFAULT_SIZE=w288h432
+
+  # Strip the keywords that sent pdftopdf to A4.  PageSize is authoritative
+  # here because CUPS has already mapped any media= request onto it.
+  REBUILT=
+  for token in $OPTIONS; do
+    case $token in
+      PageSize=*|PageRegion=*|media=*) ;;
+      *) REBUILT="${REBUILT:+$REBUILT }$token" ;;
+    esac
+  done
+  OPTIONS="${REBUILT:+$REBUILT }PageSize=$DEFAULT_SIZE"
+  echo "DEBUG: gstoraster2tspl: substituted PageSize=$DEFAULT_SIZE for" \
+       "requested '${REQUESTED:-none}', which pdftopdf would render as A4." >&2
+fi
+
+set -- "$1" "$2" "$3" "$4" "$OPTIONS" ${6+"$6"}
+
+# pdftopdf consumes the requested copy count.  Downstream stages read from
+# stdin and must see one copy or the final TSPL PRINT would multiply copies.
+/usr/lib/cups/filter/pdftopdf "$@" | /usr/lib/cups/filter/gstoraster "$1" "$2" "$3" 1 "$5" | /usr/lib/cups/filter/rastertolabel-itpp130 "$1" "$2" "$3" 1 "$5"

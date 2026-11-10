@@ -1,0 +1,7 @@
+# Build output: RPMs are built from source, not committed.
+dist/
+*.rpm
+*.tar.gz
+
+# Local build scratch
+*.o
