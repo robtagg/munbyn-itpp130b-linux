@@ -6,8 +6,13 @@ Supports CUPS 2, defaults to true **4 x 6 inch (101.6 x 152.4 mm)** labels and
 
 ## Recommended: build and install on the destination computer
 
-Extract the source bundle, open a terminal in its folder, connect/power on the
+Clone the repository, open a terminal in its folder, connect and power on the
 printer, then run as your normal user:
+
+```sh
+git clone https://github.com/robtagg/munbyn-itpp130b-linux.git
+cd munbyn-itpp130b-linux
+```
 
 ```sh
 ./install.sh
@@ -86,8 +91,9 @@ it never appears in `lpinfo -v`. Printing is unaffected, because the backend doe
 look up Serial Port when it actually opens the connection.
 
 Expect Bluetooth to be slower than USB. A 4 x 6 inch label at 203 dpi is roughly
-124 KB of bitmap, and RFCOMM carries it well below USB speed. Keep the printer
-within a few metres; a weak signal shows up as failed or truncated labels.
+124 KB of bitmap, and RFCOMM carries it well below USB speed -- about 15 seconds
+per label, against well under a second over USB. Printing itself is reliable
+once the connection opens; see *If nothing prints* for the connection step.
 
 ## Options and printing
 
@@ -161,10 +167,12 @@ Copyright 2026 DaaarQ <DaaarQ@users.noreply.github.com>, GPL-2.0-or-later.
 
 Pinned source commit: `ecdace159cf87e056d6ba0223299b7e8336462b7`.
 
-This bundle contains source and GPL-2.0-or-later license/notice files. Local changes
-correct the PDF wrapper's shell argument count, use absolute CUPS filter paths,
-and add a correctly dimensioned 4 x 6 inch paper choice. The approximately
-100 x 150 mm choice remains available. No printer serial number is bundled.
+This bundle contains source and GPL-2.0-or-later license/notice files. Local
+changes correct the PDF wrapper's shell argument count, use absolute CUPS filter
+paths, add a correctly dimensioned 4 x 6 inch paper choice, and substitute the
+PPD's default page size for a request `pdftopdf` would otherwise render as A4
+(see *If nothing prints*). The approximately 100 x 150 mm choice remains
+available. No printer serial number is bundled.
 
 A source review of all 27 upstream files found no malicious behavior or reported
 runtime vulnerability. It identified a low-severity local staging race in the
@@ -191,12 +199,12 @@ pinned commit. Comparing this tree against that commit:
 
 | File | Relationship to upstream |
 | --- | --- |
-| `source/rastertolabel-itpp130.c` | byte-for-byte upstream |
-| `source/tests/`, `source/calib.pdf` | byte-for-byte upstream |
+| `source/rastertolabel-itpp130.c` | upstream, unchanged but for an added `SPDX-FileCopyrightText` line |
+| `source/tests/*.c`, `source/tests/run-tests.sh` | upstream, unchanged but for an added `SPDX-FileCopyrightText` line |
+| `source/tests/golden/`, `source/calib.pdf`, `source/LICENSE`, `source/NOTICE` | upstream, unchanged (`NOTICE` carries a preface) |
 | `source/gstoraster2tspl` | upstream, modified here |
 | `source/ITPP130-Label-printer.ppd` | upstream, modified here |
-| `install.sh` | upstream's, substantially rewritten here |
-| `munbyn-setup`, `build-rpm.sh`, `munbyn-itpp130-driver.spec` | original work here |
+| `install.sh`, `munbyn-setup`, `build-rpm.sh`, `munbyn-itpp130-driver.spec` | original work here |
 
 Every modified file carries a change notice in its header saying what was
 changed and when, as GPL-2 section 2(a) requires. Those changes are the work

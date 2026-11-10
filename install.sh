@@ -1,12 +1,14 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: 2026 DaaarQ <DaaarQ@users.noreply.github.com>
 # SPDX-FileCopyrightText: 2026 Rob Tagg <rob@tagg.co.uk>
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# Derived in 2026 by Rob Tagg <rob@tagg.co.uk> from upstream's install.sh at
-# commit ecdace15 of https://github.com/DaaarQ/itpp130-linux-driver, and
-# substantially rewritten: it builds and tests without root, installs through
-# RPM rather than copying files into place, and configures the CUPS queue.
+# install.sh - build, install and configure the driver on this machine.
+#
+# Original work.  It shares no code with upstream's installer of the same name,
+# which runs as root and copies files directly into the CUPS directories; that
+# one is deliberately not used here.  This builds and tests without root,
+# installs through RPM so the files are owned and removable, then configures
+# the CUPS queue.
 #
 # install.sh - build, install and configure the driver on this machine
 set -euo pipefail

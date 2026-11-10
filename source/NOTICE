@@ -12,11 +12,13 @@ with three things in mind:
   * Its file list describes upstream's tree, not this one.  REVERSE-ENGINEERING.md
     and build-all.sh are upstream files and are not bundled here; see upstream.
   * Files modified in this distribution carry their own change notices in
-    their headers.  install.sh is a substantial rewrite of upstream's; the
-    filter wrapper and the PPD are modified; the filter itself and the tests
-    are byte-for-byte upstream.  munbyn-setup, build-rpm.sh, the RPM packaging
-    and this repository's README are original work by Rob Tagg
-    <rob@tagg.co.uk>.  See the README under "Author".
+    their headers.  The filter wrapper and the PPD are modified.  The filter
+    itself and the tests are unchanged from upstream apart from an added
+    SPDX-FileCopyrightText line naming upstream as the holder.  install.sh,
+    munbyn-setup, build-rpm.sh, the RPM packaging and this repository's README
+    are original work by Rob Tagg <rob@tagg.co.uk>; this install.sh shares no
+    code with upstream's installer of the same name, which is not used here.
+    See the README under "Author".
 
 Upstream's NOTICE follows, unchanged.
 
